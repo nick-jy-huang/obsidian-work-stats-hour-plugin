@@ -2,11 +2,11 @@
 
 Track your day job without leaving Obsidian. **Work Hours Stats** adds a dedicated right-pane view with a heatmap calendar, quick logging popovers, and a dashboard that compares actual vs expected hours.
 
-> This work-hours plugin lets you capture daily time in Obsidian via a calendar heatmap, review cumulative progress, and instantly fill or clear an entire month.
+This work-hours plugin lets you capture daily time in Obsidian via a calendar heatmap, review cumulative progress, and instantly fill or clear an entire month.
 
 ## Preview
 
-![Work Hours view](./images/work-hours-view.png "Work Hours view screenshot")
+![Work Hours view](./public/image.png "Work Hours view screenshot")
 
 ## Features
 
