@@ -58,18 +58,6 @@ While developing, keep the plugin enabled inside your test vault. Run `npm run b
 
 Data is persisted via `this.loadData()` / `this.saveData()`, so uninstalling the plugin removes the stored hours.
 
-## Release Workflow
-
-1. Update `manifest.json` and `package.json` to the new semantic version (e.g., `1.2.0`).
-2. Add the mapping to `versions.json` (`"1.2.0": "1.5.0"`).
-3. Run `npm run build` to generate the release-ready `main.js` and `styles.css`.
-4. Test in a vault by copying the three release files and reloading Obsidian.
-5. Create a Git tag with the exact version (no `v` prefix) and push it.
-6. Draft a GitHub release using the same version as the tag. Attach `manifest.json`, `main.js`, `styles.css`, and summarize changes.
-7. To publish on the community plugin list, follow the [official guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines) and submit a PR to [`obsidian-releases`](https://github.com/obsidianmd/obsidian-releases).
-
-> Tip: `npm version patch|minor|major` can automate Steps 1–5 (version bump + tag + versions.json entry). Review the generated commit before pushing.
-
 ## License
 
 MIT License © 2026 Nick Huang. Follow Obsidian’s community plugin policies and avoid bundling telemetry without consent.
