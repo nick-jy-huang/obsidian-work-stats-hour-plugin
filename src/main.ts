@@ -1,99 +1,201 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Plugin } from 'obsidian';
+import { DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab } from "./settings";
+import { VIEW_TYPE_WORK_STATS, WorkStatsView } from "./workStatsView";
+import {
+	WorkDayRecord,
+	WorkStatsData,
+	clampHours,
+	dateKeyFromDate,
+	getAllowedWeekdays,
+} from "./workStats";
 
-// Remember to rename these classes and interfaces!
-
-export default class MyPlugin extends Plugin {
+interface PersistedData {
 	settings: MyPluginSettings;
+	records: WorkStatsData;
+}
 
-	async onload() {
-		await this.loadSettings();
+type UnknownRecord = Record<string, unknown>;
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+function isRecord(value: unknown): value is UnknownRecord {
+	return typeof value === "object" && value !== null;
+}
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+function coerceNumber(value: unknown): number | null {
+	if (typeof value === "number" && Number.isFinite(value)) {
+		return value;
+	}
+	if (typeof value === "string" && value.trim().length > 0) {
+		const coerced = Number(value);
+		if (Number.isFinite(coerced)) {
+			return coerced;
+		}
+	}
+	return null;
+}
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+function sanitizeSettings(input: unknown): MyPluginSettings {
+	const next: MyPluginSettings = { ...DEFAULT_SETTINGS };
+	if (isRecord(input)) {
+		const workingDays = coerceNumber(input.workingDaysPerWeek);
+		if (workingDays !== null) {
+			next.workingDaysPerWeek = Math.min(Math.max(Math.round(workingDays), 0), 7);
+		}
+		const hoursPerDay = coerceNumber(input.hoursPerDay);
+		if (hoursPerDay !== null) {
+			next.hoursPerDay = Math.min(Math.max(Math.round(hoursPerDay), 1), 24);
+		}
+	}
+	return next;
+}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+function sanitizeRecords(input: unknown): WorkStatsData {
+	const safeRecords: Record<string, WorkDayRecord> = {};
+	if (isRecord(input)) {
+		for (const [key, value] of Object.entries(input)) {
+			if (isRecord(value)) {
+				const rawHours = coerceNumber(value.hours ?? value.slots);
+				if (rawHours !== null) {
+					safeRecords[key] = { hours: clampHours(rawHours) };
 				}
-				return false;
 			}
-		});
+		}
+	}
+	return { records: safeRecords };
+}
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
+function parseStoredData(raw: unknown): PersistedData {
+	const container = isRecord(raw) ? raw : {};
+	const settingsSource = "settings" in container ? container.settings : container;
+	const recordsRoot = "records" in container ? container.records : container;
+	const recordsSource = isRecord(recordsRoot) && "records" in recordsRoot ? recordsRoot.records : recordsRoot;
+	return {
+		settings: sanitizeSettings(settingsSource),
+		records: sanitizeRecords(recordsSource),
+	};
+}
+
+export default class WorkHourStatsPlugin extends Plugin {
+	settings: MyPluginSettings;
+	records: WorkStatsData = { records: {} };
+	private statsObservers = new Set<() => void>();
+
+	async onload(): Promise<void> {
+		await this.loadPluginData();
+
 		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
+		this.addRibbonIcon('clock', 'Open work stats', () => {
+			this.activateStatsView();
+		});
+		this.addCommand({
+			id: 'open-work-stats',
+			name: 'Open work stats',
+			callback: () => this.activateStatsView(),
 		});
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		this.registerView(VIEW_TYPE_WORK_STATS, (leaf) => new WorkStatsView(leaf, this));
+		this.app.workspace.onLayoutReady(() => {
+			this.revealExistingView();
+		});
 	}
 
 	onunload() {
+		this.app.workspace.getLeavesOfType(VIEW_TYPE_WORK_STATS).forEach((leaf) => leaf.detach());
 	}
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+	private async loadPluginData(): Promise<void> {
+		const stored = await this.loadData();
+		const parsed = parseStoredData(stored);
+		this.settings = parsed.settings;
+		this.records = parsed.records;
 	}
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
+	private async persist(): Promise<void> {
+		const payload: PersistedData = {
+			settings: this.settings,
+			records: this.records,
+		};
+		await this.saveData(payload);
 	}
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
+	async saveSettings(): Promise<void> {
+		await this.persist();
+		this.emitStatsChanged();
 	}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+	async saveRecord(key: string, record: WorkDayRecord): Promise<void> {
+		this.records.records[key] = {
+			hours: clampHours(record.hours),
+		};
+		await this.persist();
+		this.emitStatsChanged();
+	}
+
+	async clearMonth(year: number, month: number): Promise<void> {
+		const prefix = `${year}-${String(month + 1).padStart(2, "0")}`;
+		for (const key of Object.keys(this.records.records)) {
+			if (key.startsWith(prefix)) {
+				delete this.records.records[key];
+			}
+		}
+		await this.persist();
+		this.emitStatsChanged();
+	}
+
+	async fillMonthWithExpectedHours(year: number, month: number): Promise<void> {
+		const allowedWeekdays = getAllowedWeekdays(Math.min(Math.max(this.settings.workingDaysPerWeek, 0), 7));
+		const targetHours = clampHours(this.settings.hoursPerDay);
+		const daysInMonth = new Date(year, month + 1, 0).getDate();
+		for (let day = 1; day <= daysInMonth; day++) {
+			const date = new Date(year, month, day);
+			const key = dateKeyFromDate(date);
+			const shouldWork = allowedWeekdays.has(date.getDay());
+			this.records.records[key] = {
+				hours: shouldWork ? targetHours : 0,
+			};
+		}
+		await this.persist();
+		this.emitStatsChanged();
+	}
+
+	onStatsChanged(callback: () => void): () => void {
+		this.statsObservers.add(callback);
+		return () => this.statsObservers.delete(callback);
+	}
+
+	private emitStatsChanged(): void {
+		for (const listener of this.statsObservers) {
+			try {
+				listener();
+			} catch (err) {
+				console.error('work-stats listener failed', err);
+			}
+		}
+	}
+
+	private async activateStatsView(): Promise<void> {
+		const { workspace } = this.app;
+		let leaf = workspace.getLeavesOfType(VIEW_TYPE_WORK_STATS)[0];
+		if (!leaf) {
+			let target = workspace.getRightLeaf(false) ?? workspace.getRightLeaf(true);
+			if (!target) {
+				return;
+			}
+			await target.setViewState({ type: VIEW_TYPE_WORK_STATS, active: true });
+			leaf = target;
+		}
+		if (leaf) {
+			workspace.revealLeaf(leaf);
+		}
+	}
+
+	private revealExistingView(): void {
+		const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_WORK_STATS);
+		if (leaves.length === 0) {
+			return;
+		}
+		const [first] = leaves;
+		if (first) {
+			this.app.workspace.revealLeaf(first);
+		}
 	}
 }
